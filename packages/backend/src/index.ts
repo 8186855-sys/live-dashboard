@@ -72,15 +72,15 @@ const server = Bun.serve({
           req.headers.get("cf-connecting-ip") ||
           server.requestIP(req)?.address ||
           "";
-        response = handleCurrent(clientIp, req.headers.get("user-agent") || undefined);
+        response = await handleCurrent(clientIp, req.headers.get("user-agent") || undefined);
       } else if (pathname === "/api/timeline" && req.method === "GET") {
-        response = handleTimeline(url);
+        response = await handleTimeline(url);
       } else if (pathname === "/api/health" && req.method === "GET") {
         response = handleHealth();
       } else if (pathname === "/api/health-data" && req.method === "POST") {
         response = await handleHealthData(req);
       } else if (pathname === "/api/health-data" && req.method === "GET") {
-        response = handleHealthDataQuery(url);
+        response = await handleHealthDataQuery(url);
       } else if (pathname === "/api/health-webhook" && req.method === "POST") {
         response = await handleHealthWebhook(req);
       } else if (pathname === "/api/config" && req.method === "GET") {
@@ -142,11 +142,13 @@ const server = Bun.serve({
     }
 
     // Append CORS headers to API responses
-    for (const [key, value] of Object.entries(corsHeaders)) {
-      response.headers.set(key, value);
+    if (response) {
+      for (const [key, value] of Object.entries(corsHeaders)) {
+        response.headers.set(key, value);
+      }
     }
 
-    return response;
+    return response || Response.json({ error: "Internal error" }, { status: 500 });
   },
 });
 
