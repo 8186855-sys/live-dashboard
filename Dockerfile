@@ -10,8 +10,8 @@ RUN bun run build
 FROM oven/bun:1-alpine
 WORKDIR /app
 
-# Hugging Face Spaces requires user ID 1000
-RUN addgroup -S dashboard -g 1000 && adduser -S dashboard -G dashboard -u 1000 -h /home/dashboard
+# Create user without specifying gid (let system auto-assign)
+RUN addgroup -S dashboard && adduser -S dashboard -G dashboard -h /home/dashboard
 
 # Copy backend
 COPY packages/backend/package.json packages/backend/bun.lock* ./
