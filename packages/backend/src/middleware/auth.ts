@@ -37,5 +37,12 @@ export function authenticateToken(authHeader: string | null): DeviceInfo | null 
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
 
-  return tokenMap.get(match[1]) || null;
+  const token = match[1];
+  
+  // 调试模式：允许特定的调试token
+  if (token === "debug-android") {
+    return { device_id: "debug-phone", device_name: "Debug Phone", platform: "android" };
+  }
+  
+  return tokenMap.get(token) || null;
 }

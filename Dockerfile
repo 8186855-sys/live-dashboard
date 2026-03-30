@@ -1,3 +1,4 @@
+# Build: 2026-03-28 v2
 # Stage 1: Build frontend
 FROM oven/bun:1-alpine AS frontend-build
 WORKDIR /build
