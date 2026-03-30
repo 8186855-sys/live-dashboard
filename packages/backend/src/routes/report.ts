@@ -2,9 +2,50 @@ import { authenticateToken } from "../middleware/auth";
 import { resolveAppName } from "../services/app-mapper";
 import { isNSFW } from "../services/nsfw-filter";
 import { processDisplayTitle } from "../services/privacy-tiers";
-import { insertActivity, upsertDeviceState, hmacTitle } from "../db";
+import { insertActivity, upsertDeviceState, hmacTitle, getAllDeviceStates } from "../db";
 
 const MAX_TITLE_LENGTH = 256;
+
+function parseExtraJson(extra: unknown): Record<string, unknown> {
+  if (typeof extra !== "string" || !extra) return {};
+  try {
+    const parsed = JSON.parse(extra);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Ignore malformed stored extra JSON.
+  }
+  return {};
+}
+
+function sanitizeExtra(bodyExtra: any): Record<string, unknown> {
+  const extra: Record<string, unknown> = {};
+  if (!bodyExtra || typeof bodyExtra !== "object" || Array.isArray(bodyExtra)) {
+    return extra;
+  }
+
+  if (typeof bodyExtra.battery_percent === "number" && Number.isFinite(bodyExtra.battery_percent)) {
+    extra.battery_percent = Math.max(0, Math.min(100, Math.round(bodyExtra.battery_percent)));
+  }
+
+  if (typeof bodyExtra.battery_charging === "boolean") {
+    extra.battery_charging = bodyExtra.battery_charging;
+  }
+
+  const rawMusic = bodyExtra.music;
+  if (rawMusic != null && typeof rawMusic === "object" && !Array.isArray(rawMusic)) {
+    const music: Record<string, string> = {};
+    if (typeof rawMusic.title === "string") music.title = rawMusic.title.slice(0, 256);
+    if (typeof rawMusic.artist === "string") music.artist = rawMusic.artist.slice(0, 256);
+    if (typeof rawMusic.app === "string") music.app = rawMusic.app.slice(0, 64);
+    if (Object.keys(music).length > 0) {
+      extra.music = music;
+    }
+  }
+
+  return extra;
+}
 
 export async function handleReport(req: Request): Promise<Response> {
   // Auth
@@ -63,28 +104,19 @@ export async function handleReport(req: Request): Promise<Response> {
   const timeBucket = Math.floor(Date.now() / 10000);
   const titleHash = hmacTitle(windowTitle.toLowerCase().trim());
 
-  // Parse extra (battery, etc.) — whitelist fields first, then serialize
-  let extraJson = "{}";
-  if (body.extra && typeof body.extra === "object" && !Array.isArray(body.extra)) {
-    const extra: Record<string, unknown> = {};
-    if (typeof body.extra.battery_percent === "number" && Number.isFinite(body.extra.battery_percent)) {
-      extra.battery_percent = Math.max(0, Math.min(100, Math.round(body.extra.battery_percent)));
+  // Parse extra (battery, etc.) — preserve prior device state fields when omitted.
+  const incomingExtra = sanitizeExtra(body.extra);
+  let mergedExtra = incomingExtra;
+  try {
+    const deviceStates = await getAllDeviceStates();
+    const existingState = deviceStates.find((state: any) => state.device_id === device.device_id);
+    if (existingState) {
+      mergedExtra = { ...parseExtraJson(existingState.extra), ...incomingExtra };
     }
-    if (typeof body.extra.battery_charging === "boolean") {
-      extra.battery_charging = body.extra.battery_charging;
-    }
-    const rawMusic = body.extra.music;
-    if (rawMusic != null && typeof rawMusic === "object" && !Array.isArray(rawMusic)) {
-      const music: Record<string, string> = {};
-      if (typeof rawMusic.title === "string") music.title = rawMusic.title.slice(0, 256);
-      if (typeof rawMusic.artist === "string") music.artist = rawMusic.artist.slice(0, 256);
-      if (typeof rawMusic.app === "string") music.app = rawMusic.app.slice(0, 64);
-      if (Object.keys(music).length > 0) {
-        extra.music = music;
-      }
-    }
-    extraJson = JSON.stringify(extra);
+  } catch (e: any) {
+    console.warn("[report] Failed to load existing extra, using incoming extra only:", e.message);
   }
+  const extraJson = JSON.stringify(mergedExtra);
 
   // Insert activity — window_title is NEVER stored (privacy: empty string)
   try {
