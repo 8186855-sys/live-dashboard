@@ -343,6 +343,7 @@ const descriptions: Record<string, string> = {
   大众点评: "正在大众点评找好吃的喵~",
   小米应用商店: "正在逛应用商店喵~",
   闲鱼: "正在逛闲鱼淘二手喵~",
+  郊狼DGLB: "正在狠狠挨电中喵~",
   "Google Play": "正在逛应用商店喵~",
   "App Store": "正在逛应用商店喵~",
 
