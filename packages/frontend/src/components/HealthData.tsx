@@ -83,12 +83,12 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
     return () => clearInterval(interval);
   }, []);
 
-  // Accumulate real-time heart rate points when value changes (max 1 point per 10 seconds)
+  // Accumulate real-time heart rate points when value changes (max 1 point per 5 minutes)
   const lastPointTime = useRef(0);
   useEffect(() => {
     if (realTimeHeartRate == null) return;
     const now = Date.now();
-    if (now - lastPointTime.current < 10000) return; // Max 1 point per 10 seconds
+    if (now - lastPointTime.current < 300000) return; // Max 1 point per 5 minutes
     lastPointTime.current = now;
     setRealTimePoints(prev => [...prev, { time: new Date(), value: realTimeHeartRate }]);
   }, [realTimeHeartRate]);
