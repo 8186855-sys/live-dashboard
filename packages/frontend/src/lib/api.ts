@@ -12,6 +12,7 @@ export interface DeviceState {
   extra?: {
     battery_percent?: number;
     battery_charging?: boolean;
+    heart_rate?: number;
     music?: {
       title?: string;
       artist?: string;

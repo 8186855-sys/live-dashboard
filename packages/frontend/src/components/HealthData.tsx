@@ -38,6 +38,8 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
   const [data, setData] = useState<HealthDataResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [realTimeHeartRate, setRealTimeHeartRate] = useState<number | null>(null);
+  const [realTimePoints, setRealTimePoints] = useState<Array<{ time: Date; value: number }>>([]);
 
   useEffect(() => {
     if (!selectedDate) return;
@@ -61,6 +63,35 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
     return () => controller.abort();
   }, [selectedDate, deviceId]);
 
+  // Fetch real-time heart rate every 2 seconds
+  useEffect(() => {
+    const fetchHeartRate = async () => {
+      try {
+        const res = await fetch("/api/current");
+        if (res.ok) {
+          const data = await res.json();
+          const device = data.devices?.[0];
+          if (device?.extra?.heart_rate != null) {
+            setRealTimeHeartRate(device.extra.heart_rate);
+          }
+        }
+      } catch {}
+    };
+
+    fetchHeartRate(); // Initial fetch
+    const interval = setInterval(fetchHeartRate, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Accumulate real-time heart rate points every 1 minute
+  useEffect(() => {
+    if (realTimeHeartRate == null) return;
+    const interval = setInterval(() => {
+      setRealTimePoints(prev => [...prev, { time: new Date(), value: realTimeHeartRate }]);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [realTimeHeartRate]);
+
   // Group records by type, get latest value for each
   const grouped = useMemo(() => {
     if (!data?.records?.length) return new Map<string, { latest: HealthRecord; all: HealthRecord[] }>();
@@ -79,14 +110,18 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
     return map;
   }, [data]);
 
-  // Heart rate timeline for chart
+  // Heart rate timeline for chart (historical + real-time)
   const heartRatePoints = useMemo(() => {
     const hrData = grouped.get("heart_rate");
-    if (!hrData || hrData.all.length < 2) return [];
-    return hrData.all
-      .map((r) => ({ time: new Date(r.recorded_at), value: r.value }))
-      .sort((a, b) => a.time.getTime() - b.time.getTime());
-  }, [grouped]);
+    const historical = hrData
+      ? hrData.all
+          .map((r) => ({ time: new Date(r.recorded_at), value: r.value }))
+          .sort((a, b) => a.time.getTime() - b.time.getTime())
+      : [];
+    const combined = [...historical, ...realTimePoints];
+    combined.sort((a, b) => a.time.getTime() - b.time.getTime());
+    return combined;
+  }, [grouped, realTimePoints]);
 
   if (loading && !data) {
     return (
@@ -131,6 +166,10 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
           {coreTypes.map((type) => {
             const meta = TYPE_META[type];
             const entry = grouped.get(type)!;
+            const isHeartRate = type === "heart_rate";
+            const displayValue = isHeartRate && realTimeHeartRate != null
+              ? realTimeHeartRate
+              : entry.latest.value;
             return (
               <div
                 key={type}
@@ -140,11 +179,14 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
                   <span className="text-sm">{meta?.icon}</span>
                   <span className="text-[10px] text-[var(--color-text-muted)]">
                     {meta?.label ?? type}
+                    {isHeartRate && realTimeHeartRate != null && (
+                      <span className="ml-1 text-green-500 text-[8px]">实时</span>
+                    )}
                   </span>
                 </div>
                 <div className="flex items-baseline gap-1">
                   <span className="text-lg font-mono font-semibold text-[var(--color-text)]">
-                    {formatValue(entry.latest.value, type)}
+                    {formatValue(displayValue, type)}
                   </span>
                   <span className="text-[10px] text-[var(--color-text-muted)]">
                     {entry.latest.unit}
@@ -161,6 +203,17 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
         <div className="border border-dashed border-[var(--color-border)] rounded-md p-3">
           <p className="text-[10px] text-[var(--color-text-muted)] mb-2">今日心率趋势</p>
           <HeartRateChart points={heartRatePoints} />
+        </div>
+      )}
+
+      {/* Show message when no data yet */}
+      {heartRatePoints.length < 2 && (
+        <div className="text-center py-4">
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            {realTimeHeartRate != null
+              ? `实时心率: ${realTimeHeartRate} bpm（等待更多数据绘制趋势图）`
+              : "等待心率数据..."}
+          </p>
         </div>
       )}
 

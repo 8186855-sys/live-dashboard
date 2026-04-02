@@ -33,6 +33,10 @@ function sanitizeExtra(bodyExtra: any): Record<string, unknown> {
     extra.battery_charging = bodyExtra.battery_charging;
   }
 
+  if (typeof bodyExtra.heart_rate === "number" && Number.isFinite(bodyExtra.heart_rate)) {
+    extra.heart_rate = Math.max(0, Math.min(250, Math.round(bodyExtra.heart_rate)));
+  }
+
   const rawMusic = bodyExtra.music;
   if (rawMusic != null && typeof rawMusic === "object" && !Array.isArray(rawMusic)) {
     const music: Record<string, string> = {};
