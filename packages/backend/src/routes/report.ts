@@ -2,7 +2,7 @@ import { authenticateToken } from "../middleware/auth";
 import { resolveAppName } from "../services/app-mapper";
 import { isNSFW } from "../services/nsfw-filter";
 import { processDisplayTitle } from "../services/privacy-tiers";
-import { insertActivity, upsertDeviceState, hmacTitle, getAllDeviceStates } from "../db";
+import { insertActivity, upsertDeviceState, hmacTitle, getAllDeviceStates, insertHealthRecord } from "../db";
 
 const MAX_TITLE_LENGTH = 256;
 
@@ -159,6 +159,24 @@ export async function handleReport(req: Request): Promise<Response> {
   } catch (e: any) {
     console.error("[report] Device state update error:", e.message);
     return Response.json({ error: "Internal error" }, { status: 500 });
+  }
+
+  // Save heart rate to health_records if present
+  if (typeof incomingExtra.heart_rate === "number" && Number.isFinite(incomingExtra.heart_rate)) {
+    try {
+      await insertHealthRecord(
+        device.device_id,
+        "heart_rate",
+        incomingExtra.heart_rate,
+        "bpm",
+        new Date().toISOString(),
+        new Date().toISOString()
+      );
+    } catch (e: any) {
+      if (!e.message?.includes("UNIQUE constraint")) {
+        console.error("[report] Heart rate record insert error:", e.message);
+      }
+    }
   }
 
   return Response.json({ ok: true });
