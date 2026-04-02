@@ -83,13 +83,14 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
     return () => clearInterval(interval);
   }, []);
 
-  // Accumulate real-time heart rate points every 1 minute
+  // Accumulate real-time heart rate points when value changes (max 1 point per 10 seconds)
+  const lastPointTime = useRef(0);
   useEffect(() => {
     if (realTimeHeartRate == null) return;
-    const interval = setInterval(() => {
-      setRealTimePoints(prev => [...prev, { time: new Date(), value: realTimeHeartRate }]);
-    }, 60000);
-    return () => clearInterval(interval);
+    const now = Date.now();
+    if (now - lastPointTime.current < 10000) return; // Max 1 point per 10 seconds
+    lastPointTime.current = now;
+    setRealTimePoints(prev => [...prev, { time: new Date(), value: realTimeHeartRate }]);
   }, [realTimeHeartRate]);
 
   // Group records by type, get latest value for each
@@ -203,6 +204,17 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
         <div className="border border-dashed border-[var(--color-border)] rounded-md p-3">
           <p className="text-[10px] text-[var(--color-text-muted)] mb-2">今日心率趋势</p>
           <HeartRateChart points={heartRatePoints} />
+        </div>
+      )}
+
+      {/* Show message when no data yet */}
+      {heartRatePoints.length < 2 && (
+        <div className="text-center py-4">
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            {realTimeHeartRate != null
+              ? `实时心率: ${realTimeHeartRate} bpm（等待更多数据绘制趋势图）`
+              : "等待心率数据..."}
+          </p>
         </div>
       )}
 
