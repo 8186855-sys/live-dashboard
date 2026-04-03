@@ -2,9 +2,8 @@
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import type { HealthRecord, HealthDataResponse } from "@/lib/api";
-import { fetchHealthData } from "@/lib/api";
+import { fetchCurrent, fetchHealthData } from "@/lib/api";
 
-// Type metadata for display
 const TYPE_META: Record<string, { label: string; icon: string; priority: number }> = {
   heart_rate:             { label: "心率",     icon: "💓",  priority: 1 },
   oxygen_saturation:      { label: "血氧",     icon: "🩸", priority: 2 },
@@ -26,8 +25,8 @@ const TYPE_META: Record<string, { label: string; icon: string; priority: number 
   nutrition:              { label: "营养",     icon: "🍎", priority: 18 },
 };
 
-// Core metrics shown as cards at top
 const CORE_TYPES = ["heart_rate", "oxygen_saturation", "steps", "active_calories"];
+type HeartRange = "1h" | "3h" | "day";
 
 interface Props {
   selectedDate: string;
@@ -36,10 +35,11 @@ interface Props {
 
 export default function HealthData({ selectedDate, deviceId }: Props) {
   const [data, setData] = useState<HealthDataResponse | null>(null);
+  const [chartData, setChartData] = useState<HealthDataResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [realTimeHeartRate, setRealTimeHeartRate] = useState<number | null>(null);
-  const [realTimePoints, setRealTimePoints] = useState<Array<{ time: Date; value: number }>>([]);
+  const [chartRange, setChartRange] = useState<HeartRange>("day");
 
   useEffect(() => {
     if (!selectedDate) return;
@@ -49,7 +49,10 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
 
     fetchHealthData(selectedDate, controller.signal, deviceId)
       .then((d) => {
-        if (!controller.signal.aborted) setData(d);
+        if (!controller.signal.aborted) {
+          setData(d);
+          setChartData(d);
+        }
       })
       .catch((e) => {
         if (!controller.signal.aborted && e?.name !== "AbortError") {
@@ -63,37 +66,42 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
     return () => controller.abort();
   }, [selectedDate, deviceId]);
 
-  // Fetch real-time heart rate every 2 seconds
   useEffect(() => {
     const fetchHeartRate = async () => {
       try {
-        const res = await fetch("/api/current");
-        if (res.ok) {
-          const data = await res.json();
-          const device = data.devices?.[0];
-          if (device?.extra?.heart_rate != null) {
-            setRealTimeHeartRate(device.extra.heart_rate);
-          }
+        const current = await fetchCurrent();
+        const device = deviceId
+          ? current.devices.find((d) => d.device_id === deviceId)
+          : current.devices[0];
+        if (device?.extra?.heart_rate != null) {
+          setRealTimeHeartRate(device.extra.heart_rate);
         }
-      } catch {}
+      } catch {
+        // ignore realtime fetch errors
+      }
     };
 
-    fetchHeartRate(); // Initial fetch
+    fetchHeartRate();
     const interval = setInterval(fetchHeartRate, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [deviceId]);
 
-  // Accumulate real-time heart rate points when value changes (max 1 point per 5 minutes)
-  const lastPointTime = useRef(0);
   useEffect(() => {
-    if (realTimeHeartRate == null) return;
-    const now = Date.now();
-    if (now - lastPointTime.current < 300000) return; // Max 1 point per 5 minutes
-    lastPointTime.current = now;
-    setRealTimePoints(prev => [...prev, { time: new Date(), value: realTimeHeartRate }]);
-  }, [realTimeHeartRate]);
+    if (!selectedDate) return;
+    const refreshChart = async () => {
+      try {
+        const controller = new AbortController();
+        const d = await fetchHealthData(selectedDate, controller.signal, deviceId);
+        setChartData(d);
+      } catch {
+        // ignore chart refresh errors
+      }
+    };
 
-  // Group records by type, get latest value for each
+    const interval = setInterval(refreshChart, 60000);
+    return () => clearInterval(interval);
+  }, [selectedDate, deviceId]);
+
   const grouped = useMemo(() => {
     if (!data?.records?.length) return new Map<string, { latest: HealthRecord; all: HealthRecord[] }>();
     const map = new Map<string, { latest: HealthRecord; all: HealthRecord[] }>();
@@ -111,18 +119,43 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
     return map;
   }, [data]);
 
-  // Heart rate timeline for chart (historical + real-time)
-  const heartRatePoints = useMemo(() => {
-    const hrData = grouped.get("heart_rate");
-    const historical = hrData
-      ? hrData.all
-          .map((r) => ({ time: new Date(r.recorded_at), value: r.value }))
-          .sort((a, b) => a.time.getTime() - b.time.getTime())
-      : [];
-    const combined = [...historical, ...realTimePoints];
-    combined.sort((a, b) => a.time.getTime() - b.time.getTime());
-    return combined;
-  }, [grouped, realTimePoints]);
+  const chartHeartRatePoints = useMemo(() => {
+    const source = chartData?.records ?? [];
+    const hrRecords = source.filter((r) => r.type === "heart_rate");
+    if (hrRecords.length === 0) return [] as { time: Date; value: number }[];
+
+    const now = new Date();
+    const rangeStart = new Date(now);
+    if (chartRange === "1h") {
+      rangeStart.setHours(now.getHours() - 1);
+    } else if (chartRange === "3h") {
+      rangeStart.setHours(now.getHours() - 3);
+    } else {
+      rangeStart.setHours(0, 0, 0, 0);
+    }
+
+    const filtered = hrRecords.filter((r) => new Date(r.recorded_at) >= rangeStart);
+    const buckets = new Map<string, { ts: number; values: number[] }>();
+
+    for (const r of filtered) {
+      const d = new Date(r.recorded_at);
+      d.setSeconds(0, 0);
+      const key = d.toISOString();
+      const existing = buckets.get(key);
+      if (existing) {
+        existing.values.push(r.value);
+      } else {
+        buckets.set(key, { ts: d.getTime(), values: [r.value] });
+      }
+    }
+
+    return Array.from(buckets.values())
+      .sort((a, b) => a.ts - b.ts)
+      .map((bucket) => ({
+        time: new Date(bucket.ts),
+        value: bucket.values.reduce((sum, v) => sum + v, 0) / bucket.values.length,
+      }));
+  }, [chartData, chartRange]);
 
   if (loading && !data) {
     return (
@@ -149,7 +182,6 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
     );
   }
 
-  // Sorted types by priority
   const sortedTypes = Array.from(grouped.keys()).sort((a, b) => {
     const pa = TYPE_META[a]?.priority ?? 99;
     const pb = TYPE_META[b]?.priority ?? 99;
@@ -161,7 +193,6 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
 
   return (
     <div className="space-y-3">
-      {/* Core metrics cards */}
       {coreTypes.length > 0 && (
         <div className="grid grid-cols-2 gap-2">
           {coreTypes.map((type) => {
@@ -199,37 +230,36 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
         </div>
       )}
 
-      {/* Heart rate trend chart */}
-      {heartRatePoints.length >= 2 && (
-        <div className="border border-dashed border-[var(--color-border)] rounded-md p-3">
-          <p className="text-[10px] text-[var(--color-text-muted)] mb-2">今日心率趋势</p>
-          <HeartRateChart points={heartRatePoints} />
+      <div className="border border-dashed border-[var(--color-border)] rounded-md p-3">
+        <div className="flex items-center justify-between mb-2 gap-2">
+          <p className="text-[10px] text-[var(--color-text-muted)]">心率趋势图</p>
+          <div className="flex gap-1 text-[10px]">
+            {(["1h", "3h", "day"] as HeartRange[]).map((range) => (
+              <button
+                key={range}
+                type="button"
+                onClick={() => setChartRange(range)}
+                className={`px-2 py-1 rounded border ${chartRange === range ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]" : "border-[var(--color-border)] text-[var(--color-text-muted)]"}`}
+              >
+                {range === "1h" ? "最近1小时" : range === "3h" ? "最近3小时" : "当日"}
+              </button>
+            ))}
+          </div>
         </div>
-      )}
 
-      {/* Show message when no data yet */}
-      {heartRatePoints.length < 2 && (
-        <div className="text-center py-4">
-          <p className="text-[10px] text-[var(--color-text-muted)]">
-            {realTimeHeartRate != null
-              ? `实时心率: ${realTimeHeartRate} bpm（等待更多数据绘制趋势图）`
-              : "等待心率数据..."}
-          </p>
-        </div>
-      )}
+        {chartHeartRatePoints.length >= 2 ? (
+          <HeartRateChart points={chartHeartRatePoints} />
+        ) : (
+          <div className="text-center py-4">
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              {realTimeHeartRate != null
+                ? `实时心率: ${realTimeHeartRate} bpm（等待更多数据库历史点绘制趋势图）`
+                : "等待心率数据..."}
+            </p>
+          </div>
+        )}
+      </div>
 
-      {/* Show message when no data yet */}
-      {heartRatePoints.length < 2 && (
-        <div className="text-center py-4">
-          <p className="text-[10px] text-[var(--color-text-muted)]">
-            {realTimeHeartRate != null
-              ? `实时心率: ${realTimeHeartRate} bpm（等待更多数据绘制趋势图）`
-              : "等待心率数据..."}
-          </p>
-        </div>
-      )}
-
-      {/* Secondary metrics */}
       {secondaryTypes.length > 0 && (
         <div className="border border-dashed border-[var(--color-border)] rounded-md p-2">
           <div className="space-y-1">
@@ -275,7 +305,6 @@ function formatValue(value: number, type: string): string {
   return value.toFixed(1);
 }
 
-// Pure SVG heart rate chart — responsive full-width, with hover tooltip
 function HeartRateChart({ points }: { points: { time: Date; value: number }[] }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -285,7 +314,6 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
   const padX = 36;
   const padY = 8;
 
-  // Memoize all derived data to avoid recalc on hover re-renders
   const { pointCoords, pathD, labelTimes, minVal, maxVal } = useMemo(() => {
     if (points.length < 2) return { pointCoords: [], pathD: "", labelTimes: [], minVal: 0, maxVal: 0 };
 
@@ -319,7 +347,6 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
     return { pointCoords: coords, pathD: d, labelTimes: labels, minVal: mn, maxVal: mx };
   }, [points]);
 
-  // Binary search for nearest point by X coordinate (points are time-sorted → X-sorted)
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
       const svg = svgRef.current;
@@ -335,7 +362,6 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
         if (pointCoords[mid]!.x < svgX) lo = mid + 1;
         else hi = mid;
       }
-      // Check lo and lo-1 to find actual nearest
       let nearest = lo;
       if (lo > 0 && Math.abs(pointCoords[lo - 1]!.x - svgX) < Math.abs(pointCoords[lo]!.x - svgX)) {
         nearest = lo - 1;
@@ -351,13 +377,9 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
 
   const hovered = hoverIdx !== null ? points[hoverIdx] : null;
   const hoveredCoord = hoverIdx !== null ? pointCoords[hoverIdx] : null;
-
-  // Tooltip text
   const tooltipText = hovered
     ? `${hovered.time.getHours().toString().padStart(2, "0")}:${hovered.time.getMinutes().toString().padStart(2, "0")}  ${Math.round(hovered.value)} bpm`
     : "";
-
-  // Keep tooltip inside SVG bounds
   const tooltipX = hoveredCoord ? Math.min(Math.max(hoveredCoord.x, padX + 40), width - padX - 40) : 0;
   const tooltipY = hoveredCoord ? Math.max(hoveredCoord.y - 10, padY + 4) : 0;
 
@@ -369,11 +391,9 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
     >
-      {/* Grid lines */}
       <line x1={padX} y1={padY} x2={padX} y2={height} stroke="var(--color-border)" strokeWidth="0.5" />
       <line x1={padX} y1={height} x2={width - padX} y2={height} stroke="var(--color-border)" strokeWidth="0.5" />
 
-      {/* Data line */}
       <path
         d={pathD}
         fill="none"
@@ -383,10 +403,8 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
         strokeLinejoin="round"
       />
 
-      {/* Hover indicator */}
       {hoveredCoord && (
         <>
-          {/* Vertical guide line */}
           <line
             x1={hoveredCoord.x}
             y1={padY}
@@ -397,14 +415,7 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
             strokeDasharray="3,3"
             opacity="0.5"
           />
-          {/* Dot on the line */}
-          <circle
-            cx={hoveredCoord.x}
-            cy={hoveredCoord.y}
-            r="3"
-            fill="var(--color-primary)"
-          />
-          {/* Tooltip background */}
+          <circle cx={hoveredCoord.x} cy={hoveredCoord.y} r="3" fill="var(--color-primary)" />
           <rect
             x={tooltipX - 46}
             y={tooltipY - 14}
@@ -416,7 +427,6 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
             strokeWidth="0.5"
             opacity="0.95"
           />
-          {/* Tooltip text */}
           <text
             x={tooltipX}
             y={tooltipY - 3}
@@ -430,7 +440,6 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
         </>
       )}
 
-      {/* Time labels */}
       {labelTimes.map((lt, i) => (
         <text
           key={i}
@@ -445,7 +454,6 @@ function HeartRateChart({ points }: { points: { time: Date; value: number }[] })
         </text>
       ))}
 
-      {/* Min/max labels */}
       <text x={padX - 3} y={padY + 6} textAnchor="end" fontSize="10" fill="var(--color-text-muted)" fontFamily="JetBrains Mono, monospace">
         {Math.round(maxVal)}
       </text>
