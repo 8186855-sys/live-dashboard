@@ -111,14 +111,29 @@ export async function handleReport(req: Request): Promise<Response> {
   // Parse extra (battery, etc.) — preserve prior device state fields when omitted.
   const incomingExtra = sanitizeExtra(body.extra);
   let mergedExtra = incomingExtra;
+  let existingExtra: Record<string, unknown> = {};
   try {
     const deviceStates = await getAllDeviceStates();
     const existingState = deviceStates.find((state: any) => state.device_id === device.device_id);
     if (existingState) {
-      mergedExtra = { ...parseExtraJson(existingState.extra), ...incomingExtra };
+      existingExtra = parseExtraJson(existingState.extra);
+      mergedExtra = { ...existingExtra, ...incomingExtra };
     }
   } catch (e: any) {
     console.warn("[report] Failed to load existing extra, using incoming extra only:", e.message);
+  }
+
+  if (typeof incomingExtra.heart_rate === "number" && Number.isFinite(incomingExtra.heart_rate)) {
+    const nowIso = new Date().toISOString();
+    mergedExtra.heart_rate_updated_at = nowIso;
+    const previousHeartRate = typeof existingExtra.heart_rate === "number" && Number.isFinite(existingExtra.heart_rate)
+      ? existingExtra.heart_rate
+      : null;
+    if (previousHeartRate === null || previousHeartRate !== incomingExtra.heart_rate) {
+      mergedExtra.heart_rate_changed_at = nowIso;
+    } else if (typeof existingExtra.heart_rate_changed_at === "string") {
+      mergedExtra.heart_rate_changed_at = existingExtra.heart_rate_changed_at;
+    }
   }
   const extraJson = JSON.stringify(mergedExtra);
 
