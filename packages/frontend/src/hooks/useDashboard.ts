@@ -33,13 +33,9 @@ export function useDashboard() {
       try {
         setError(null);
         if (firstLoad.current) setLoading(true);
-        const [cur, tl] = await Promise.all([
-          fetchCurrent(controller.signal),
-          fetchTimeline(selectedDate, controller.signal),
-        ]);
+        const cur = await fetchCurrent(controller.signal);
         if (!controller.signal.aborted && thisRequest === requestId) {
           setCurrent(cur);
-          setTimeline(tl);
           setViewerCount(cur.viewer_count ?? 0);
           firstLoad.current = false;
         }
@@ -61,6 +57,29 @@ export function useDashboard() {
     return () => {
       controller.abort();
       clearInterval(pollId);
+    };
+  }, [selectedDate]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const doFetchTimeline = async () => {
+      try {
+        const tl = await fetchTimeline(selectedDate, controller.signal);
+        if (!controller.signal.aborted) {
+          setTimeline(tl);
+        }
+      } catch (e) {
+        if (!controller.signal.aborted) {
+          setError(e instanceof Error ? e.message : "Failed to fetch timeline");
+        }
+      }
+    };
+
+    doFetchTimeline();
+
+    return () => {
+      controller.abort();
     };
   }, [selectedDate]);
 

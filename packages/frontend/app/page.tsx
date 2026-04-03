@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "@/hooks/useDashboard";
 import { useConfig, useConfigLoader, ConfigContext } from "@/hooks/useConfig";
 import type { DeviceState } from "@/lib/api";
-import { fetchHealthData } from "@/lib/api";
 import Header from "@/components/Header";
 import CurrentStatus from "@/components/CurrentStatus";
 import DeviceCard from "@/components/DeviceCard";
@@ -33,14 +32,6 @@ function HomeInner() {
 
   // Tab state (lifted from RightPanelTabs for conditional rendering)
   const [tab, setTab] = useState<"activity" | "health">("activity");
-
-  // Check if health data exists for the selected date
-  const [hasHealthData, setHasHealthData] = useState(false);
-
-  // Reset tab to activity if health data disappears
-  useEffect(() => {
-    if (!hasHealthData && tab === "health") setTab("activity");
-  }, [hasHealthData, tab]);
 
   // Build currentAppByDevice map for Timeline
   const currentAppByDevice = useMemo(() => {
@@ -76,28 +67,6 @@ function HomeInner() {
     }
     return devices.find((d) => d.is_online === 1) || devices[0];
   }, [devices, selectedDeviceId]);
-
-  // Check if health data exists for the selected date + device
-  const selectedDeviceIdResolved = selectedDevice?.device_id;
-  useEffect(() => {
-    // Don't fetch until we have both a date and a resolved device
-    if (!selectedDate || !selectedDeviceIdResolved) {
-      setHasHealthData(false);
-      return;
-    }
-    setHasHealthData(false); // reset immediately on device/date change
-    const controller = new AbortController();
-    fetchHealthData(selectedDate, controller.signal, selectedDeviceIdResolved)
-      .then((d) => {
-        if (!controller.signal.aborted) {
-          setHasHealthData(d.records.length > 0);
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setHasHealthData(false);
-      });
-    return () => controller.abort();
-  }, [selectedDate, selectedDeviceIdResolved]);
 
   // Filter timeline data by selected device
   const filteredTimeline = useMemo(() => {
@@ -181,30 +150,28 @@ function HomeInner() {
               {/* Date picker + tab buttons on same line */}
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <DatePicker selectedDate={selectedDate} onChange={changeDate} />
-                {hasHealthData && (
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => setTab("activity")}
-                      className={`pill-btn text-xs px-3 py-1 ${
-                        tab === "activity"
-                          ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
-                          : ""
-                      }`}
-                    >
-                      活动
-                    </button>
-                    <button
-                      onClick={() => setTab("health")}
-                      className={`pill-btn text-xs px-3 py-1 ${
-                        tab === "health"
-                          ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
-                          : ""
-                      }`}
-                    >
-                      健康
-                    </button>
-                  </div>
-                )}
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setTab("activity")}
+                    className={`pill-btn text-xs px-3 py-1 ${
+                      tab === "activity"
+                        ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
+                        : ""
+                    }`}
+                  >
+                    活动
+                  </button>
+                  <button
+                    onClick={() => setTab("health")}
+                    className={`pill-btn text-xs px-3 py-1 ${
+                      tab === "health"
+                        ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
+                        : ""
+                    }`}
+                  >
+                    健康
+                  </button>
+                </div>
               </div>
 
               <div className="separator-dashed mb-3" />
@@ -234,7 +201,11 @@ function HomeInner() {
                   ) : null}
                 </>
               ) : (
-                <HealthData selectedDate={selectedDate} deviceId={selectedDevice?.device_id} />
+                <HealthData
+                  selectedDate={selectedDate}
+                  deviceId={selectedDevice?.device_id}
+                  currentDevice={selectedDevice}
+                />
               )}
             </div>
           </div>

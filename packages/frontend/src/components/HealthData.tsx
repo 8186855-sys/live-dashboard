@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
-import type { HealthRecord, HealthDataResponse } from "@/lib/api";
+import type { DeviceState, HealthRecord, HealthDataResponse } from "@/lib/api";
 import { fetchCurrent, fetchHealthData } from "@/lib/api";
 
 const TYPE_META: Record<string, { label: string; icon: string; priority: number }> = {
@@ -28,12 +28,18 @@ const TYPE_META: Record<string, { label: string; icon: string; priority: number 
 const CORE_TYPES = ["heart_rate", "oxygen_saturation", "steps", "active_calories"];
 type HeartRange = "1h" | "3h" | "day";
 
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 interface Props {
   selectedDate: string;
   deviceId?: string;
+  currentDevice?: DeviceState;
 }
 
-export default function HealthData({ selectedDate, deviceId }: Props) {
+export default function HealthData({ selectedDate, deviceId, currentDevice }: Props) {
   const [data, setData] = useState<HealthDataResponse | null>(null);
   const [chartData, setChartData] = useState<HealthDataResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -68,42 +74,63 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
   }, [selectedDate, deviceId]);
 
   useEffect(() => {
-    const fetchHeartRate = async () => {
+    if (currentDevice?.extra?.heart_rate != null) {
+      setRealTimeHeartRate(currentDevice.extra.heart_rate);
+      setRealTimeHeartRateUpdatedAt(currentDevice.extra.heart_rate_updated_at ?? null);
+    } else {
+      setRealTimeHeartRate(null);
+      setRealTimeHeartRateUpdatedAt(null);
+    }
+  }, [currentDevice]);
+
+  useEffect(() => {
+    if (!selectedDate || selectedDate !== todayStr()) return;
+
+    const appendRealtimeHeartRate = async () => {
       try {
         const current = await fetchCurrent();
         const device = deviceId
           ? current.devices.find((d) => d.device_id === deviceId)
           : current.devices[0];
-        if (device?.extra?.heart_rate != null) {
-          setRealTimeHeartRate(device.extra.heart_rate);
-          setRealTimeHeartRateUpdatedAt(device.extra.heart_rate_updated_at ?? null);
-        } else {
-          setRealTimeHeartRate(null);
-          setRealTimeHeartRateUpdatedAt(null);
-        }
+        const heartRate = device?.extra?.heart_rate;
+        const updatedAt = device?.extra?.heart_rate_updated_at;
+
+        if (typeof heartRate !== "number" || !updatedAt) return;
+
+        setRealTimeHeartRate(heartRate);
+        setRealTimeHeartRateUpdatedAt(updatedAt);
+        setChartData((prev) => {
+          if (!prev) return prev;
+
+          const hasSamePoint = prev.records.some((record) => (
+            record.type === "heart_rate"
+            && record.recorded_at === updatedAt
+            && record.device_id === (device?.device_id ?? deviceId ?? prev.records[0]?.device_id)
+          ));
+          if (hasSamePoint) return prev;
+
+          const nextRecord: HealthRecord = {
+            device_id: device?.device_id ?? deviceId ?? "",
+            type: "heart_rate",
+            value: heartRate,
+            unit: "bpm",
+            recorded_at: updatedAt,
+            end_time: "",
+          };
+
+          return {
+            ...prev,
+            records: [...prev.records, nextRecord].sort((a, b) => (
+              a.recorded_at.localeCompare(b.recorded_at)
+            )),
+          };
+        });
       } catch {
-        // ignore realtime fetch errors
+        // ignore realtime heart rate refresh errors
       }
     };
 
-    fetchHeartRate();
-    const interval = setInterval(fetchHeartRate, 2000);
-    return () => clearInterval(interval);
-  }, [deviceId]);
-
-  useEffect(() => {
-    if (!selectedDate) return;
-    const refreshChart = async () => {
-      try {
-        const controller = new AbortController();
-        const d = await fetchHealthData(selectedDate, controller.signal, deviceId);
-        setChartData(d);
-      } catch {
-        // ignore chart refresh errors
-      }
-    };
-
-    const interval = setInterval(refreshChart, 60000);
+    const interval = setInterval(appendRealtimeHeartRate, 60000);
     return () => clearInterval(interval);
   }, [selectedDate, deviceId]);
 

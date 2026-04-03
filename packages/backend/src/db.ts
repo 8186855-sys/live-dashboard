@@ -185,6 +185,13 @@ export async function cleanupOldActivities() {
   return result.rowsAffected || 0;
 }
 
+export async function cleanupOldHealthRecords() {
+  const result = await db.execute(
+    "DELETE FROM health_records WHERE created_at < datetime('now', '-7 days')"
+  );
+  return result.rowsAffected || 0;
+}
+
 // Health records
 export async function insertHealthRecord(
   deviceId: string,

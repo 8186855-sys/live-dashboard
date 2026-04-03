@@ -1,11 +1,18 @@
-import { cleanupOldActivities, markOfflineDevices } from "../db";
+import { cleanupOldActivities, cleanupOldHealthRecords, markOfflineDevices } from "../db";
 
 // Cleanup old activities every hour
 setInterval(async () => {
   try {
-    const deleted = await cleanupOldActivities();
-    if (deleted > 0) {
-      console.log(`[cleanup] Deleted ${deleted} old activity records`);
+    const [deletedActivities, deletedHealthRecords] = await Promise.all([
+      cleanupOldActivities(),
+      cleanupOldHealthRecords(),
+    ]);
+
+    if (deletedActivities > 0) {
+      console.log(`[cleanup] Deleted ${deletedActivities} old activity records`);
+    }
+    if (deletedHealthRecords > 0) {
+      console.log(`[cleanup] Deleted ${deletedHealthRecords} old health records`);
     }
   } catch (e) {
     console.error("[cleanup] Failed:", e);
