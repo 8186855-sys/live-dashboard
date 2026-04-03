@@ -39,6 +39,7 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [realTimeHeartRate, setRealTimeHeartRate] = useState<number | null>(null);
+  const [realTimeHeartRateUpdatedAt, setRealTimeHeartRateUpdatedAt] = useState<string | null>(null);
   const [chartRange, setChartRange] = useState<HeartRange>("day");
 
   useEffect(() => {
@@ -75,6 +76,10 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
           : current.devices[0];
         if (device?.extra?.heart_rate != null) {
           setRealTimeHeartRate(device.extra.heart_rate);
+          setRealTimeHeartRateUpdatedAt(device.extra.heart_rate_updated_at ?? null);
+        } else {
+          setRealTimeHeartRate(null);
+          setRealTimeHeartRateUpdatedAt(null);
         }
       } catch {
         // ignore realtime fetch errors
@@ -224,6 +229,11 @@ export default function HealthData({ selectedDate, deviceId }: Props) {
                     {entry.latest.unit}
                   </span>
                 </div>
+                {isHeartRate && realTimeHeartRate != null && realTimeHeartRateUpdatedAt && (
+                  <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
+                    更新时间 {formatShortTime(realTimeHeartRateUpdatedAt)}
+                  </p>
+                )}
               </div>
             );
           })}
@@ -303,6 +313,16 @@ function formatValue(value: number, type: string): string {
   if (type === "hydration") return Math.round(value).toString();
   if (Number.isInteger(value)) return value.toString();
   return value.toFixed(1);
+}
+
+function formatShortTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function HeartRateChart({ points }: { points: { time: Date; value: number }[] }) {
